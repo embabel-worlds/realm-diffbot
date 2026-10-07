@@ -13,6 +13,7 @@ version: 0.1.0
 author: Rod Johnson
 url: https://github.com/johnsonr/realm-diffbot
 icon: icon.svg
+category: knowledge
 tags:
   - knowledge-graph
   - companies
