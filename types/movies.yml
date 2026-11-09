@@ -126,37 +126,6 @@
             actorName: castmember.name
             characterLink: characterLink
 
-      brings:
-        # The cast as NODES, not as two parallel lists. `castNames` and `characterNames` are both
-        # projected on the film for display, but they are NOT positionally aligned and must never be
-        # zipped: `[*]` drops elements whose field is absent, so a film with 31 cast members and 20
-        # recorded characters yields lists of 31 and 20 — every pairing after the first gap is wrong,
-        # and an index past the shorter list fails the query outright. Measured on "The Odyssey"
-        # (2026): 31 vs 20. On "Ultraman Tiga": 4 vs 0, so characterNames is absent entirely.
-        #
-        # `id` IS `characterName`, NOT the actor, and that is forced rather than chosen. The host
-        # reads a brought child's id off the RAW record BEFORE applying `project`, and skips the
-        # child silently when it is absent:
-        #     val childId = child[brought.id]?.toString() ?: continue
-        # The raw entry is { castmember: {name}, characterName, characterLink }, so the only
-        # top-level scalars available as an identity are characterName and characterLink. `id:
-        # actorName` named a PROJECTED field, matched nothing on every child, and produced no edges
-        # at all — the query then reported "relationship type HAS_CAST is not available".
-        #
-        # The cost of keying on the character: a credit with no recorded character has no id and is
-        # dropped, so this edge carries only the credits where a role is known — 20 of 31 on The
-        # Odyssey. That is the right trade for a view whose whole purpose is the actor/character
-        # pairing (a credit with no character contributes nothing to it), and the COMPLETE cast list
-        # is still on the film as `castNames`. Two actors sharing a character name in one film would
-        # merge; scope cast queries to a film and it stays exact.
-        - childType: DiffbotCastMember
-          relationship: HAS_CAST
-          records: "$.castmembers[*]"
-          id: characterName
-          project:
-            actorName: castmember.name
-            characterLink: characterLink
-
 
     # CROSS-REALM. `Movie` is realm-movie's type — the films the user has actually rated — and
     # `imdbId` is the key both sides already hold. REQUIRES realm-movie to be installed; without it
