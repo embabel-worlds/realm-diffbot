@@ -7,13 +7,13 @@
 - name: DiffbotPerson
   userAnchor: false
   description: |
-    A person as the Diffbot Knowledge Graph currently holds them — public professional record only,
-    fused from web sources and materialized transiently.
+    One person's public professional record in the Diffbot Knowledge Graph, identified by diffbotId.
+    Read live per query, not stored; fused from web sources, and nbOrigins (sources fused) is the
+    confidence signal. For someone in your own address book, use the world's Person.
 
     Coverage is extremely uneven and skewed toward people with a public professional footprint: a
     software executive is well covered, a plumber is not there at all. An absent record means
-    "Diffbot has not indexed this person", never "this person does not exist" — and a low nbOrigins
-    means the record rests on one or two pages.
+    "Diffbot has not indexed this person", never "this person does not exist".
   properties:
     diffbotId:
       identity: true
@@ -39,6 +39,22 @@
     diffbotUri: "Canonical https://diffbot.com/entity/<id> URI."
     matchedFor: "What this record was fetched for — an email, a question, or an employer's id — echoed by the producer so the join matches what was asked rather than what came back."
 
+  examples:
+    # People are reached from a company (EMPLOYS, FORMERLY_EMPLOYED, LED_BY) or from a title; true
+    # leavers are FORMERLY_EMPLOYED minus EMPLOYS.
+    - q: "where did people who left Diffbot go"
+      cypher: |
+        MATCH (:DiffbotCompany {name: 'Diffbot'})-[:RESOLVED_TO]->(o:DiffbotOrganization)
+        MATCH (o)-[:FORMERLY_EMPLOYED]->(p:DiffbotPerson)
+        WHERE NOT (o)-[:EMPLOYS]->(p) AND p.currentEmployerId <> o.diffbotId
+        RETURN p.currentEmployerName AS wentTo, count(*) AS people
+        ORDER BY people DESC
+    - q: "CTOs in Melbourne"
+      cypher: |
+        MATCH (:DiffbotJobTitle {title: 'CTO'})-[:HELD_BY]->(p:DiffbotPerson)
+        WHERE p.city = 'Melbourne'
+        RETURN p.name, p.currentEmployerName, p.linkedInUri
+
   virtualJoins:
     # Person is a CORE label, so this attaches to the address book itself. Email first, for the same
     # reason the Organization bridge uses domain: it identifies. canonicalEmail reads the whole
@@ -46,6 +62,10 @@
     # them resolves the bridge, rather than only whichever address happens to be primary.
     - anchorLabel: Person
       relationship: HAS_DIFFBOT_PERSON
+      description: >-
+        From a Person in your own graph to their public Diffbot record, matched on email by Enhance
+        (score at least 0.7). Resolved once, kept, and refreshed after 90 days. A personal address
+        or an unindexed person has no edge, which says nothing about the person.
       keyField: primaryEmail
       recordKeyField: matchedFor
       producer: personEnhanceByEmail
@@ -64,6 +84,9 @@
     # off the organization anchor.
     - anchorLabel: DiffbotOrganization
       relationship: LED_BY
+      description: >-
+        From a company to its CEO, by Diffbot's ceo id; one batched id lookup. ceoName on the
+        company holds the name without the hop. No edge when Diffbot records no CEO.
       keyField: ceoId
       recordKeyField: diffbotId
       producer: peopleById
@@ -75,6 +98,11 @@
     # headcount, and the gap between the two is usually enormous.
     - anchorLabel: DiffbotOrganization
       relationship: EMPLOYS
+      description: >-
+        From a company to people Diffbot lists as CURRENTLY employed there: publicly visible staff
+        only, at most 10 per company. A route into a company, never a headcount (that is
+        nbEmployees). One call per company; filters on the person's city, region or country are sent
+        to Diffbot.
       keyField: diffbotId
       recordKeyField: matchedFor
       producer: peopleByEmployer
@@ -86,6 +114,11 @@
     #   MATCH (o)-[:FORMERLY_EMPLOYED]->(p) WHERE NOT (o)-[:EMPLOYS]->(p)
     - anchorLabel: DiffbotOrganization
       relationship: FORMERLY_EMPLOYED
+      description: >-
+        From a company to people holding a NON-current employment there. That includes people
+        promoted internally, so true leavers are this edge minus EMPLOYS: WHERE NOT
+        (o)-[:EMPLOYS]->(p). At most 10 per company, one call per company; location filters on the
+        person are sent to Diffbot.
       keyField: diffbotId
       recordKeyField: matchedFor
       producer: alumniByEmployer
@@ -97,6 +130,10 @@
     # characterNames already read as a cast list without any of them.
     - anchorLabel: DiffbotMovie
       relationship: DIRECTED_BY
+      description: >-
+        From a film to each credited director, resolved by a scored NAME match (Enhance, threshold
+        0.45): a best guess that can land on a namesake. One Enhance call per distinct name, kept a
+        week.
       keyField: directorNames
       recordKeyField: matchedFor
       producer: personEnhanceByName
@@ -108,6 +145,10 @@
     #   WHERE p.city = 'Melbourne'
     - anchorLabel: DiffbotJobTitle
       relationship: HELD_BY
+      description: >-
+        From a job title, (:DiffbotJobTitle {title:'CTO'}), to people currently holding it: at most
+        20 per title, a sample. Filters on the person's city, region and country are sent to
+        Diffbot, so always narrow by location; one call per title.
       keyField: title
       recordKeyField: matchedFor
       producer: peopleByTitle
@@ -117,8 +158,9 @@
 - name: DiffbotJobTitle
   userAnchor: false
   description: |
-    A job title, used as a search anchor over CURRENT employments. Traverse HELD_BY for the people
-    holding it, and narrow with predicates on the person (city, country), which push to the source.
+    A job title used as a search entry point over CURRENT employments, identified by `title` as it
+    would appear on a profile. Traverse HELD_BY for the people holding it, and narrow with predicates
+    on the person (city, region, country), which are sent to Diffbot.
 
     The title is matched as Diffbot records it, so prefer the common form ("CTO", "Chief Technology
     Officer") and expect a title that nobody spells that way to return nothing.

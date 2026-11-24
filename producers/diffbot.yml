@@ -44,6 +44,9 @@
     type: Organization
     threshold: 0.7
   records: "$.data[*].entity"
+  # pushdown: [] — Enhance takes the identifying input and a score threshold, and no filters, so a
+  # WHERE on the matched record is applied in the graph after the single best match comes back.
+  pushdown: []
   project:
     diffbotId: id
     name: name
@@ -107,6 +110,9 @@
     type: Person
     threshold: 0.7
   records: "$.data[*].entity"
+  # pushdown: [] — Enhance takes the identifying input and a score threshold, and no filters, so a
+  # WHERE on the matched record is applied in the graph after the single best match comes back.
+  pushdown: []
   project:
     diffbotId: id
     name: name
@@ -154,7 +160,9 @@
   operation: dqlSearch
   args:
     query: "type:Organization id:or({keys})"
-    size: 10
+    # As many results as ids asked for. Diffbot bills per entity RETURNED, so this spends nothing
+    # extra; at size 10 a batch of 50 ids silently kept only the first 10.
+    size: 50
   keyTemplate: '"{key}"'
   keyJoin: ","
   maxKeysPerCall: 50          # the endpoint's own result ceiling — more ids than that cannot answer
@@ -163,6 +171,11 @@
   # anchors only for SCALARS: an alias to a mapping arrives as the bare string 'orgProjection',
   # which cannot bind to Map<String,String>, and one unbindable entry fails the WHOLE file — so
   # every producer in it silently disappears and the first fetch reports 'Unknown producer'.
+  # pushdown: [] — deliberately, although DQL could take filters here. These producers serve the
+  # recursive ownership hops (PARENT_COMPANY*, SUBSIDIARY_OF*, ULTIMATE_PARENT, ACQUIRED_BY, LED_BY,
+  # CAREER_AT, WORKS_AT): a filter meant for the END of a walk must not prune the companies the walk
+  # passes through, so nothing is sent and every hop stays complete.
+  pushdown: []
   project:
     diffbotId: id
     name: name
@@ -204,8 +217,8 @@
     diffbotUri: diffbotUri
   cache:
     kind: ttl
-    seconds: 86400
-    negativeTtlSeconds: 86400  # an id the graph does not hold stays unheld
+    seconds: 604800           # a week: ownership, headcount and careers move over weeks
+    negativeTtlSeconds: 604800  # an id the graph does not hold stays unheld
   cost:
     bucket: diffbot
     rate: "5/sec"
@@ -216,7 +229,9 @@
   operation: dqlSearch
   args:
     query: "type:Person id:or({keys})"
-    size: 10
+    # As many results as ids asked for. Diffbot bills per entity RETURNED, so this spends nothing
+    # extra; at size 10 a batch of 50 ids silently kept only the first 10.
+    size: 50
   keyTemplate: '"{key}"'
   keyJoin: ","
   maxKeysPerCall: 50
@@ -225,6 +240,11 @@
   # anchors only for SCALARS: an alias to a mapping arrives as the bare string 'personProjection',
   # which cannot bind to Map<String,String>, and one unbindable entry fails the WHOLE file — so
   # every producer in it silently disappears and the first fetch reports 'Unknown producer'.
+  # pushdown: [] — deliberately, although DQL could take filters here. These producers serve the
+  # recursive ownership hops (PARENT_COMPANY*, SUBSIDIARY_OF*, ULTIMATE_PARENT, ACQUIRED_BY, LED_BY,
+  # CAREER_AT, WORKS_AT): a filter meant for the END of a walk must not prune the companies the walk
+  # passes through, so nothing is sent and every hop stays complete.
+  pushdown: []
   project:
     diffbotId: id
     name: name
@@ -251,8 +271,8 @@
     diffbotUri: diffbotUri
   cache:
     kind: ttl
-    seconds: 86400
-    negativeTtlSeconds: 86400
+    seconds: 604800           # a week: ownership, headcount and careers move over weeks
+    negativeTtlSeconds: 604800
   cost:
     bucket: diffbot
     rate: "5/sec"
@@ -280,6 +300,11 @@
   # anchors only for SCALARS: an alias to a mapping arrives as the bare string 'orgProjection',
   # which cannot bind to Map<String,String>, and one unbindable entry fails the WHOLE file — so
   # every producer in it silently disappears and the first fetch reports 'Unknown producer'.
+  # pushdown: [] — deliberately, although DQL could take filters here. These producers serve the
+  # recursive ownership hops (PARENT_COMPANY*, SUBSIDIARY_OF*, ULTIMATE_PARENT, ACQUIRED_BY, LED_BY,
+  # CAREER_AT, WORKS_AT): a filter meant for the END of a walk must not prune the companies the walk
+  # passes through, so nothing is sent and every hop stays complete.
+  pushdown: []
   project:
     diffbotId: id
     name: name
@@ -319,7 +344,7 @@
     githubUri: githubUri
     twitterUri: twitterUri
     diffbotUri: diffbotUri
-  cache: { kind: ttl, seconds: 86400, negativeTtlSeconds: 86400 }
+  cache: { kind: ttl, seconds: 604800, negativeTtlSeconds: 604800 }
   cost:
     bucket: diffbot
     rate: "5/sec"
@@ -332,7 +357,7 @@
   kind: remote
   operation: dqlSearch
   args:
-    query: "type:Organization competitors.id:or({keys})"
+    query: "type:Organization competitors.id:or({keys}) {filters}"
     size: 10
   keyTemplate: '"{key}"'
   keyJoin: ","
@@ -347,6 +372,45 @@
   # anchors only for SCALARS: an alias to a mapping arrives as the bare string 'orgProjection',
   # which cannot bind to Map<String,String>, and one unbindable entry fails the WHOLE file — so
   # every producer in it silently disappears and the first fetch reports 'Unknown producer'.
+  # Every filter on the competing company is sent to Diffbot: each one spends credits only on the
+  # companies the question keeps.
+  pushdown:
+    - property: country
+      op: EQUALS
+      qualifier: 'location.country.name:"{value}"'
+      valuePattern: "^([A-Za-z .'-]+)$"
+    - property: region
+      op: EQUALS
+      qualifier: 'location.region.name:"{value}"'
+      valuePattern: "^([A-Za-z .'-]+)$"
+    - property: city
+      op: EQUALS
+      qualifier: 'location.city.name:"{value}"'
+      valuePattern: "^([A-Za-z .'-]+)$"
+    - property: nbEmployees
+      op: GREATER_THAN
+      qualifier: "nbEmployees>{value}"
+      valuePattern: "^([0-9]+)$"
+    - property: nbEmployees
+      op: LESS_THAN
+      qualifier: "nbEmployees<{value}"
+      valuePattern: "^([0-9]+)$"
+    - property: isPublic
+      op: EQUALS
+      qualifier: "isPublic:{value}"
+      valuePattern: "^(true|false)$"
+    - property: isAcquired
+      op: EQUALS
+      qualifier: "isAcquired:{value}"
+      valuePattern: "^(true|false)$"
+    - property: isDissolved
+      op: EQUALS
+      qualifier: "isDissolved:{value}"
+      valuePattern: "^(true|false)$"
+    - property: isNonProfit
+      op: EQUALS
+      qualifier: "isNonProfit:{value}"
+      valuePattern: "^(true|false)$"
   project:
     diffbotId: id
     name: name
@@ -402,7 +466,7 @@
   args:
     # Braces here are DQL's own subquery syntax, not template placeholders — only the named
     # {keys} / {filters} slots are substituted.
-    query: "type:Person employments.{employer.id:or({keys}) isCurrent:true}"
+    query: "type:Person employments.{employer.id:or({keys}) isCurrent:true} {filters}"
     size: 10
   keyTemplate: '"{key}"'
   keyJoin: ","
@@ -417,6 +481,19 @@
   # anchors only for SCALARS: an alias to a mapping arrives as the bare string 'personProjection',
   # which cannot bind to Map<String,String>, and one unbindable entry fails the WHOLE file — so
   # every producer in it silently disappears and the first fetch reports 'Unknown producer'.
+  pushdown:
+    - property: city
+      op: EQUALS
+      qualifier: 'location.city.name:"{value}"'
+      valuePattern: "^([A-Za-z .'-]+)$"
+    - property: region
+      op: EQUALS
+      qualifier: 'location.region.name:"{value}"'
+      valuePattern: "^([A-Za-z .'-]+)$"
+    - property: country
+      op: EQUALS
+      qualifier: 'location.country.name:"{value}"'
+      valuePattern: "^([A-Za-z .'-]+)$"
   project:
     diffbotId: id
     name: name
@@ -441,7 +518,7 @@
     twitterUri: twitterUri
     crunchbaseUri: crunchbaseUri
     diffbotUri: diffbotUri
-  cache: { kind: ttl, seconds: 86400, negativeTtlSeconds: 86400 }
+  cache: { kind: ttl, seconds: 604800, negativeTtlSeconds: 604800 }
   cost:
     bucket: diffbot
     rate: "5/sec"
@@ -573,13 +650,26 @@
   kind: remote
   operation: dqlSearch
   args:
-    query: "type:Person employments.{employer.id:or({keys}) isCurrent:false}"
+    query: "type:Person employments.{employer.id:or({keys}) isCurrent:false} {filters}"
     size: 10
   keyTemplate: '"{key}"'
   keyJoin: ","
   echoKeyAs: matchedFor
   batchSafe: false
   records: "$.data[*].entity"
+  pushdown:
+    - property: city
+      op: EQUALS
+      qualifier: 'location.city.name:"{value}"'
+      valuePattern: "^([A-Za-z .'-]+)$"
+    - property: region
+      op: EQUALS
+      qualifier: 'location.region.name:"{value}"'
+      valuePattern: "^([A-Za-z .'-]+)$"
+    - property: country
+      op: EQUALS
+      qualifier: 'location.country.name:"{value}"'
+      valuePattern: "^([A-Za-z .'-]+)$"
   project:
     diffbotId: id
     name: name
@@ -601,7 +691,7 @@
     twitterUri: twitterUri
     crunchbaseUri: crunchbaseUri
     diffbotUri: diffbotUri
-  cache: { kind: ttl, seconds: 86400, negativeTtlSeconds: 86400 }
+  cache: { kind: ttl, seconds: 604800, negativeTtlSeconds: 604800 }
   cost:
     bucket: diffbot
     rate: "5/sec"
@@ -627,6 +717,9 @@
     # attribute a film to two studios it has nothing to do with.
     size: 1
   records: "$.data[*].entity"
+  # pushdown: [] — Enhance takes the identifying input and a score threshold, and no filters, so a
+  # WHERE on the matched record is applied in the graph after the single best match comes back.
+  pushdown: []
   project:
     diffbotId: id
     name: name
@@ -686,6 +779,9 @@
     threshold: 0.45
     size: 1
   records: "$.data[*].entity"
+  # pushdown: [] — Enhance takes the identifying input and a score threshold, and no filters, so a
+  # WHERE on the matched record is applied in the graph after the single best match comes back.
+  pushdown: []
   project:
     diffbotId: id
     name: name
@@ -724,6 +820,9 @@
   batchSafe: false
   records: "$.data[*].entity"
   # Written out in full: YAML anchors resolve here but not in the host's Jackson parser.
+  # pushdown: [] — a key lookup. The key IS the filter; a WHERE on the result is applied in the
+  # graph, and adding it to the request would only split the cache for a record already bought.
+  pushdown: []
   project:
     diffbotId: id
     name: name
@@ -817,6 +916,14 @@
       op: EQUALS
       qualifier: "isAcquired:{value}"
       valuePattern: "^(true|false)$"
+    - property: isDissolved
+      op: EQUALS
+      qualifier: "isDissolved:{value}"
+      valuePattern: "^(true|false)$"
+    - property: isNonProfit
+      op: EQUALS
+      qualifier: "isNonProfit:{value}"
+      valuePattern: "^(true|false)$"
     - property: name
       op: CONTAINS
       qualifier: 'name:"{value}"'
@@ -860,7 +967,7 @@
     githubUri: githubUri
     twitterUri: twitterUri
     diffbotUri: diffbotUri
-  cache: { kind: ttl, seconds: 21600, negativeTtlSeconds: 21600 }
+  cache: { kind: ttl, seconds: 86400, negativeTtlSeconds: 86400 }
   cost: { bucket: diffbot, rate: "5/sec", yield: medium }
 
 - name: peopleByTitle
@@ -883,6 +990,10 @@
       op: EQUALS
       qualifier: 'location.country.name:"{value}"'
       valuePattern: "^([A-Za-z .'-]+)$"
+    - property: region
+      op: EQUALS
+      qualifier: 'location.region.name:"{value}"'
+      valuePattern: "^([A-Za-z .'-]+)$"
   project:
     diffbotId: id
     name: name
@@ -904,7 +1015,7 @@
     twitterUri: twitterUri
     crunchbaseUri: crunchbaseUri
     diffbotUri: diffbotUri
-  cache: { kind: ttl, seconds: 21600, negativeTtlSeconds: 21600 }
+  cache: { kind: ttl, seconds: 86400, negativeTtlSeconds: 86400 }
   cost: { bucket: diffbot, rate: "5/sec", yield: medium }
 
 - name: moviesByGenre
@@ -964,6 +1075,10 @@
     - property: releaseDate
       op: GREATER_THAN
       qualifier: 'releaseDate>"{value}"'
+      valuePattern: '^(\d{4}-\d{2}-\d{2})'
+    - property: releaseDate
+      op: LESS_THAN
+      qualifier: 'releaseDate<"{value}"'
       valuePattern: '^(\d{4}-\d{2}-\d{2})'
   project:
     diffbotId: id

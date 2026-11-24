@@ -1,7 +1,8 @@
 name: diffbot
 description: |
-  The Diffbot Knowledge Graph — roughly 10 billion entities crawled and resolved from the public
-  web — reached through Virtual Cypher as a traversable graph rather than as a search index.
+  Companies, people, articles, job posts and films from the Diffbot Knowledge Graph, read live.
+  Roughly 10 billion entities crawled and resolved from the public web, reached through Virtual
+  Cypher as a traversable graph rather than as a search index.
 
   Diffbot's own query language, DQL, filters one entity type at a time and cannot follow a
   reference: its ownership, employment and article-tag fields are resolved pointers, but walking
