@@ -51,15 +51,14 @@ calls() { printf '%s' "$1" | py 'import json,sys; print(json.load(sys.stdin).get
 echo "== L1: every view answers by name =="
 # Defaults throughout, except the two spending ceilings, run at 2. Views anchored on your own
 # correspondence (Contact*, HiddenCommonOwner, QuietlyAbsorbed, ExecutiveExposure, HiringSignals)
-# and MyFilmsByOwner (realm-movie's ratings) may answer zero rows on a world without that data;
-# they must still answer without an error.
+# may answer zero rows on a world without that data; they must still answer without an error.
 for spec in 'CompanyProfile {}' 'CompanySearch {}' 'CompanyOwnership {}' 'GroupRollup {}' \
             'SiblingCompanies {}' 'WhoOwnsThisMarket {"companies":2}' 'BoardInterlocks {}' \
             'TalentFlow {}' 'CompetitorHiring {}' 'SkillDemand {"companies":2}' 'PeopleSearch {}' \
             'ContactCompanyProfiles {}' 'HiddenCommonOwner {}' 'QuietlyAbsorbed {}' \
             'ContactCompanyNews {}' 'ExecutiveExposure {}' 'HiringSignals {}' 'MovieSearch {}' \
             'RepeatCollaborators {}' 'FilmOwnership {"films":2}' 'DirectorFilmography {}' \
-            'FilmCast {}' 'MyFilmsByOwner {}'; do
+            'FilmCast {}'; do
   name=${spec%% *}; args=${spec#* }
   R=$(view "$name" "$args")
   out=$(printf '%s' "$R" | py 'import json,sys

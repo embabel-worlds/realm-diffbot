@@ -57,7 +57,6 @@ exports:
   - FilmOwnership
   - DirectorFilmography
   - FilmCast
-  - MyFilmsByOwner
 
 # NOTE the absence of `rate-limited` from retryOn, which is deliberate and was learned the hard way.
 #

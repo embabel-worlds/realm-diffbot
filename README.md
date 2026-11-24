@@ -237,7 +237,6 @@ organizations, so the catalogue opens directly into the ownership graph.
 | `MovieSearch` / `DirectorFilmography` / `FilmCast` | films, filmographies, actor↔character credits |
 | `RepeatCollaborators` | the ensemble a director actually works with, counted correctly |
 | `FilmOwnership` | who ultimately owns the studios behind a set of films |
-| `MyFilmsByOwner` | the films YOU rated, grouped by who owns the studio (needs realm-movie) |
 
 `RepeatCollaborators` is the sharpest illustration of what the traversal layer is for, because
 Diffbot answers the same question in ONE call and gets it wrong. `facet:castmembers.castmember.name`
@@ -250,8 +249,9 @@ makes the duplication visible. Measured live: Caine 8, Cillian Murphy 6, Christi
 Oldman 4, Tom Hardy 3 — each independently checkable, unlike the facet's ranking, which is only
 accidentally right because the duplication happens to be near-uniform.
 
-`MyFilmsByOwner` is the one that needs three worlds to agree — your own ratings, Diffbot's film
-catalogue, and its corporate ownership graph — joined on an IMDb id and a company name.
+Your own rated films, grouped by who owns the studio, is a question for a realm that installs beside
+both this one and realm-movie: a view here that read realm-movie's `MovieRating` would be unanswerable,
+and flagged, on every world without it.
 
 ### Requires realm-movie (optional)
 

@@ -549,27 +549,3 @@
            c.characterName AS character,
            size(f.castNames) AS totalCreditsOnFilm
     ORDER BY actor
-- name: MyFilmsByOwner
-  description: |
-    Films you rated, grouped by who ultimately owns the studio that made them.
-
-    The one query here that needs three sources to agree: your own ratings, Diffbot's film catalogue
-    and its corporate ownership graph, joined on an IMDb id and a company name. Studios are matched by
-    name (a good guess), and the ownership walk stops at four levels.
-
-    REQUIRES realm-movie. Without it there are no rated films to anchor on and this returns nothing.
-  params:
-    minRating:
-      type: int
-      default: 4
-      description: Only films you rated at least this highly.
-  cypher: |
-    MATCH (r:MovieRating)-[:OF_MOVIE]->(m:Movie)
-    WHERE r.rating >= $minRating
-    MATCH (m)-[:HAS_DIFFBOT_MOVIE]->(f:DiffbotMovie)-[:PRODUCED_BY]->(studio:DiffbotOrganization)
-    OPTIONAL MATCH (studio)-[:PARENT_COMPANY*1..4]->(owner:DiffbotOrganization)
-    WITH m, studio, collect(owner)[-1] AS ultimate
-    RETURN coalesce(ultimate.name, studio.name) AS ultimateOwner,
-           count(DISTINCT m) AS filmsYouRated,
-           collect(DISTINCT m.title)[0..8] AS films
-    ORDER BY filmsYouRated DESC
