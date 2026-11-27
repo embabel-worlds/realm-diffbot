@@ -12,14 +12,16 @@
 - name: DiffbotOrganization
   userAnchor: false
   description: |
-    A company, non-profit or other organization as the Diffbot Knowledge Graph currently holds it,
-    fused from many public web sources and materialized transiently for the life of one query.
+    One company, non-profit or other organization in the Diffbot Knowledge Graph, identified by
+    diffbotId (homepageUri is the strongest key to other systems). Read live per query, not stored.
+    Facts are fused from public web pages: headcount and revenue are estimates, and nbOrigins, the
+    number of sources fused, is the confidence signal.
 
-    A Diffbot record is what the public web says about an organization, not a register of fact.
-    Headcount and revenue are estimates, `foundingDate` is often the date of the earliest source
-    rather than of incorporation, and a private company's record is far thinner than a listed one's.
-    `nbOrigins` — how many sources the record was fused from — is the honest confidence signal:
-    hundreds means a well-covered company, a handful means one press release.
+    A Diffbot record is what the public web says, not a register of fact. `foundingDate` is often the
+    date of the earliest source rather than of incorporation, and a private company's record is far
+    thinner than a listed one's: hundreds of origins means well covered, a handful means one press
+    release. For the CRM's own account of a company, use the world's Organization; this is the outside
+    view of it.
   properties:
     diffbotId:
       identity: true
@@ -30,8 +32,8 @@
     nbEmployees: { type: int, description: "Estimated current headcount. An estimate from public signals, not a filing." }
     nbEmployeesMin: { type: int, description: "Lower bound of the estimated headcount range." }
     nbEmployeesMax: { type: int, description: "Upper bound of the estimated headcount range." }
-    revenue: { type: int, description: "Estimated annual revenue, in revenueCurrency. Reliable for listed companies, an inference for private ones." }
-    revenueCurrency: "Currency of the revenue estimate."
+    revenue: { type: int, description: "Estimated annual revenue in major units (whole dollars, not cents) of revenueCurrency. Reliable for listed companies, an inference for private ones." }
+    revenueCurrency: "ISO 4217 code of the revenue estimate, e.g. USD; never sum revenue across different codes."
     foundingDate: "Founding date in Diffbot's own textual form, which carries a leading `d` (e.g. `d2000-05-22`). DISPLAY ONLY — a lexical comparison against a plain ISO date is meaningless because `d` sorts above every digit. Filter on foundingDateTimestamp."
     foundingDateTimestamp: { type: int, description: "Founding date as epoch milliseconds. The filterable twin of foundingDate — verified live 2026-08-14." }
     isPublic: { type: boolean, description: "Publicly listed." }
@@ -55,13 +57,34 @@
     ceoName: "CEO name, present without following the LED_BY hop."
     stockSymbol: "Primary ticker, when listed. Diffbot returns `stock` as a single OBJECT, not a list — verified live 2026-08-14."
     stockExchange: "Exchange the ticker trades on, e.g. `Nasdaq (NASDAQ)`."
-    capitalization: { type: int, description: "Market capitalization in the record's own currency, when listed." }
+    capitalization: { type: int, description: "Market capitalization in major units of the listing's currency (usually USD), when listed; empty for private companies." }
     linkedInUri: "LinkedIn company page."
     crunchbaseUri: "Crunchbase profile."
     githubUri: "GitHub organization."
     twitterUri: "X/Twitter profile."
     diffbotUri: "Canonical https://diffbot.com/entity/<id> URI. Also the value article tags carry."
     matchedFor: "What this record was fetched for — a domain, a question, or the id of the company it was named a competitor of — echoed by the producer so the join matches what was asked rather than what came back."
+
+  examples:
+    # A named company starts at DiffbotCompany and RESOLVED_TO, which binds ONE organization; the
+    # ownership hops then walk from it. Filters on a search go in WHERE, where they are sent to Diffbot.
+    - q: "who ultimately owns Shazam"
+      cypher: |
+        MATCH (:DiffbotCompany {name: 'Shazam'})-[:RESOLVED_TO]->(d:DiffbotOrganization)
+        MATCH path = (d)-[:PARENT_COMPANY*1..4]->(owner:DiffbotOrganization)
+        RETURN length(path) AS level, owner.name AS owner, owner.country AS country
+        ORDER BY level
+    - q: "what does Apple own, and roughly how many people work across the group"
+      cypher: |
+        MATCH (:DiffbotCompany {name: 'Apple'})-[:RESOLVED_TO]->(p:DiffbotOrganization)
+        OPTIONAL MATCH (p)<-[:SUBSIDIARY_OF*1..3]-(sub:DiffbotOrganization)
+        RETURN p.name AS group, count(DISTINCT sub) AS subsidiariesSeen, sum(sub.nbEmployees) AS estimatedHeadcount
+    - q: "large listed mining companies in Australia"
+      cypher: |
+        MATCH (:DiffbotIndustry {name: 'Mining'})-[:HAS_COMPANY]->(o:DiffbotOrganization)
+        WHERE o.country = 'Australia' AND o.isPublic = true AND o.nbEmployees > 5000
+        RETURN o.name, o.nbEmployees, o.stockSymbol
+        ORDER BY o.nbEmployees DESC
 
   virtualJoins:
     # ------------------------------------------------------------------------------------------
@@ -77,6 +100,12 @@
     # learnedHandle rule picks it up without a lookup.
     - anchorLabel: Organization
       relationship: HAS_DIFFBOT_ORG
+      description: >-
+        From an Organization in your own graph to the Diffbot record for the same company, matched
+        on its web domain by Diffbot Enhance (score at least 0.7). One Enhance call per organization
+        the first time; the link is then kept and refreshed after 90 days. An organization with no
+        domain, or one Diffbot has not indexed, has no edge. Start here for anything about companies
+        you correspond with.
       keyField: domain
       recordKeyField: matchedFor
       producer: orgEnhanceByDomain
@@ -97,6 +126,11 @@
     # sourceId/sourceName/hop provenance. maxFanoutTotal is the whole walk's budget, not one hop's.
     - anchorLabel: DiffbotOrganization
       relationship: PARENT_COMPANY
+      description: >-
+        From a company UP to its immediate parent, by Diffbot's resolved parentCompany id. Walk it
+        variable-length, -[:PARENT_COMPANY*1..4]->, for the whole ownership chain; each level is one
+        batched id lookup of up to 50 companies. No edge means Diffbot records no parent, not that
+        the company is independent.
       keyField: parentCompanyId
       recordKeyField: diffbotId
       producer: orgsById
@@ -109,6 +143,11 @@
     # different sources.
     - anchorLabel: DiffbotOrganization
       relationship: ULTIMATE_PARENT
+      description: >-
+        From a company straight to its topmost owner as Diffbot computes it, in one hop: the cheap
+        answer to 'who ultimately owns X'. Where it disagrees with the end of a PARENT_COMPANY walk,
+        Diffbot's chain and its rollup came from different sources; report both. No edge when
+        Diffbot records no ultimate parent.
       keyField: ultimateParentId
       recordKeyField: diffbotId
       producer: orgsById
@@ -122,6 +161,11 @@
     # Note the direction: the edge is declared FROM the child, so a group rollup reads inbound.
     - anchorLabel: DiffbotOrganization
       relationship: SUBSIDIARY_OF
+      description: >-
+        (child)-[:SUBSIDIARY_OF]->(parent): every company whose parentCompany is this one. Read it
+        INBOUND from the parent, (parent)<-[:SUBSIDIARY_OF*1..3]-(sub), for a group's subsidiaries.
+        One Diffbot query per batch of up to 25 parents, returning at most 10 companies per call, so
+        a large group is SAMPLED rather than enumerated and any total over it is a lower bound.
       keyField: diffbotId
       recordKeyField: parentCompanyId
       producer: orgsByParent
@@ -130,6 +174,10 @@
 
     - anchorLabel: DiffbotOrganization
       relationship: ACQUIRED_BY
+      description: >-
+        From an acquired company to its acquirer, by Diffbot's acquiredBy id. Present only when
+        isAcquired is true and Diffbot recorded the buyer; acquiredByName on the company holds the
+        name without the hop.
       keyField: acquiredById
       recordKeyField: diffbotId
       producer: orgsById
@@ -146,6 +194,11 @@
     # instead, which is also why it fetches one anchor at a time.
     - anchorLabel: DiffbotOrganization
       relationship: COMPETES_WITH
+      description: >-
+        (company)-[:COMPETES_WITH]->(other): companies that NAME this one as a competitor in their
+        own Diffbot record. Inbound claims, not this company's own competitor list, and the least
+        reliable edge in the realm. One call per company, at most 10 results; filters on the other
+        company's location, headcount, isPublic and isAcquired are sent to Diffbot.
       keyField: diffbotId
       recordKeyField: matchedFor
       producer: orgsByCompetitor
@@ -160,6 +213,11 @@
     # naming the same studio converge on one node — which is what makes counting possible.
     - anchorLabel: DiffbotMovie
       relationship: PRODUCED_BY
+      description: >-
+        From a film to each of its production companies, resolved by a scored NAME match (Enhance,
+        threshold 0.45): a good guess, not a fact, so check nbOrigins before repeating it. One
+        Enhance call per distinct studio name, kept a week. Continue up PARENT_COMPANY to reach who
+        owns the studio.
       keyField: productionCompanyNames
       recordKeyField: matchedFor
       producer: orgEnhanceByName
@@ -172,6 +230,10 @@
     # go" a counting question rather than a reading exercise.
     - anchorLabel: DiffbotPerson
       relationship: CAREER_AT
+      description: >-
+        From a person to EVERY employer in their history, current and past, by employer id. One
+        person fans out to many companies and many people converge on one, which makes 'where do
+        people from X go' a counting question. For the current employer only, use WORKS_AT.
       keyField: employerIds
       recordKeyField: diffbotId
       producer: orgsById
@@ -183,6 +245,9 @@
     # none of which Diffbot can traverse.
     - anchorLabel: DiffbotPerson
       relationship: WORKS_AT
+      description: >-
+        From a person to their CURRENT employer, the most recent employment Diffbot lists, by
+        employer id; batched id lookups. For the whole career use CAREER_AT.
       keyField: currentEmployerId
       recordKeyField: diffbotId
       producer: orgsById
@@ -203,6 +268,11 @@
     # means "every company like this".
     - anchorLabel: DiffbotCompany
       relationship: RESOLVED_TO
+      description: >-
+        From a company NAME you supply, (:DiffbotCompany {name:'Acme'}), to the single best-matching
+        Diffbot organization, by Enhance (one call, kept a week). Binds at most one company, so use
+        it whenever a question means 'this company'. An ambiguous or unknown name yields no row
+        rather than a guess.
       keyField: name
       recordKeyField: matchedFor
       producer: orgEnhanceByName
@@ -222,6 +292,11 @@
     # rule (or whose value fails its pattern) filter graph-side instead: same rows, higher cost.
     - anchorLabel: DiffbotIndustry
       relationship: HAS_COMPANY
+      description: >-
+        From an industry label, (:DiffbotIndustry {name:'Real Estate'}), to companies Diffbot files
+        under it: at most 20 per industry, a SAMPLE of a loose match, never a census. Filters on the
+        company's country, region, city, nbEmployees bounds, isPublic, isAcquired, isDissolved,
+        isNonProfit and name are sent to Diffbot, so put them in WHERE; one call per industry.
       keyField: name
       recordKeyField: matchedFor
       producer: orgsByIndustry
@@ -233,8 +308,8 @@
 - name: DiffbotCompany
   userAnchor: false
   description: |
-    One company, named. Traverse RESOLVED_TO to resolve the name to a single Diffbot entity, then
-    every structural hop is available from it.
+    A company NAME used as an entry point, identified by `name` as you write it. Traverse RESOLVED_TO
+    to resolve it to one Diffbot organization; every structural hop is then available from it.
 
     Resolution is a scored best match, so a name that is ambiguous or absent yields nothing rather
     than a guess. Names are weak evidence: prefer the fullest form you have.
@@ -249,12 +324,12 @@
 - name: DiffbotIndustry
   userAnchor: false
   description: |
-    A Diffbot industry label, used as a search anchor. Traverse HAS_COMPANY to find companies in it,
-    and narrow with ordinary predicates on the company — country, city, headcount, isPublic — which
-    are pushed to the source rather than applied after fetching.
+    A Diffbot industry label used as a search entry point, identified by `name` exactly as Diffbot
+    spells it. Traverse HAS_COMPANY for companies in it and narrow with predicates on the company
+    (country, city, headcount, isPublic), which are sent to Diffbot rather than applied afterwards.
 
-    Matching is loose: "Real Estate" alone reports ~2.5M companies, so a bare traversal is a sample
-    of the index rather than a census. Always narrow it.
+    Matching is loose: "Real Estate" alone reports about 2.5M companies, and at most 20 come back, so a
+    bare traversal is a sample of the index rather than a census. Always narrow it.
   properties:
     name:
       identity: true

@@ -1,34 +1,28 @@
 - name: CompanyProfile
-  description: 'One company, resolved from a name or a describing phrase, as a node other traversals compose
+  description: |
+    One company's Diffbot profile, resolved from its name.
 
-    onto. The starting point for most of the views below.
-
-    '
+    Resolves to a single best match (or nothing, for an ambiguous or unknown name) as a node other
+    traversals compose onto; the starting point for most views below. Not a list of similar
+    companies: for those use CompanySearch.
   outputLabel: DiffbotOrganization
   params:
     ask:
       type: string
       default: Diffbot
-      description: The company name.
-  cypher: 'MATCH (:DiffbotCompany {name: $ask})-[:RESOLVED_TO]->(o:DiffbotOrganization)
-
+      description: The company's name as you would write it; resolved to the single best Diffbot match, not matched
+        literally.
+  cypher: |
+    MATCH (:DiffbotCompany {name: $ask})-[:RESOLVED_TO]->(o:DiffbotOrganization)
     RETURN o
-
-    '
 - name: CompanySearch
-  description: 'Companies in an industry, narrowed by ordinary predicates. Nothing is generated: the industry
-    is
+  description: |
+    Companies in one industry, narrowed by city and minimum headcount.
 
-    the source key and country / city / headcount are rendered into DQL by declared rules, so the
-
-    same parameters always send the same query.
-
-
-    Diffbot''s industry matching is loose, so ALWAYS narrow. Capped at 20 per fetch — a sample of the
-
-    index, never a census.
-
-    '
+    Nothing is generated: the industry is the source key and city / headcount are rendered into DQL by
+    declared rules, so the same parameters always send the same query. Diffbot's industry matching is
+    loose, so ALWAYS narrow. At most 20 companies per fetch, a sample of the index, never a census;
+    for a count of a market this is not the view.
   outputLabel: DiffbotOrganization
   params:
     industry:
@@ -38,81 +32,82 @@
     city:
       type: string
       default: Sydney
-      description: Headquarters city. Blank for any.
+      description: Headquarters city, exactly as Diffbot spells it (e.g. 'Sydney'); matched exactly and sent to
+        Diffbot.
     minEmployees:
       type: int
       default: 500
       description: Minimum headcount.
-  cypher: 'MATCH (:DiffbotIndustry {name: $industry})-[:HAS_COMPANY]->(o:DiffbotOrganization)
-
+  cypher: |
+    MATCH (:DiffbotIndustry {name: $industry})-[:HAS_COMPANY]->(o:DiffbotOrganization)
     WHERE o.city = $city AND o.nbEmployees > $minEmployees
-
     RETURN o
-
-    '
 - name: CompanyOwnership
-  description: 'The ownership chain above a company, walked level by level. The question Diffbot holds
-    the data
-
+  description: |
+    The ownership chain above a company, walked level by level. The question Diffbot holds the data
     for and cannot answer: each level is a separate lookup on its side, with the ids copied by hand.
-
-    '
   params:
     ask:
       type: string
       default: Shazam
       description: The company name.
-  cypher: "MATCH (:DiffbotCompany {name: $ask})-[:RESOLVED_TO]->(d:DiffbotOrganization)\nMATCH path =\
-    \ (d)-[:PARENT_COMPANY*1..4]->(owner:DiffbotOrganization)\nRETURN length(path) AS level,\n       owner.name\
-    \ AS owner,\n       owner.country AS country,\n       owner.nbEmployees AS ownerHeadcount,\n     \
-    \  owner.isPublic AS ownerIsPublic,\n       owner.diffbotUri AS source\nORDER BY level ASC\n"
+  cypher: |
+    MATCH (:DiffbotCompany {name: $ask})-[:RESOLVED_TO]->(d:DiffbotOrganization)
+    MATCH path = (d)-[:PARENT_COMPANY*1..4]->(owner:DiffbotOrganization)
+    RETURN length(path) AS level,
+           owner.name AS owner,
+           owner.country AS country,
+           owner.nbEmployees AS ownerHeadcount,
+           owner.isPublic AS ownerIsPublic,
+           owner.diffbotUri AS source
+    ORDER BY level ASC
 - name: GroupRollup
-  description: 'A company plus everything beneath it. The totals are SUMS of Diffbot''s per-entity estimates
-    — a
-
+  description: |
+    A company plus everything beneath it. The totals are SUMS of Diffbot's per-entity estimates — a
     scale indication, not a consolidated account — and a lower bound whenever the walk stops at its
-
     declared depth.
-
-    '
   params:
     ask:
       type: string
       default: Apple
       description: The parent company's name.
-  cypher: "MATCH (:DiffbotCompany {name: $ask})-[:RESOLVED_TO]->(parent:DiffbotOrganization)\nOPTIONAL\
-    \ MATCH (parent)<-[:SUBSIDIARY_OF*1..3]-(sub:DiffbotOrganization)\nRETURN parent.name AS group,\n\
-    \       count(DISTINCT sub) AS entities,\n       sum(sub.nbEmployees) AS estimatedGroupHeadcount,\n\
-    \       sum(sub.revenue) AS estimatedGroupRevenue,\n       collect(DISTINCT sub.country)[0..20] AS\
-    \ countries\n"
+  cypher: |
+    MATCH (:DiffbotCompany {name: $ask})-[:RESOLVED_TO]->(parent:DiffbotOrganization)
+    OPTIONAL MATCH (parent)<-[:SUBSIDIARY_OF*1..3]-(sub:DiffbotOrganization)
+    RETURN parent.name AS group,
+           count(DISTINCT sub) AS entities,
+           sum(sub.nbEmployees) AS estimatedGroupHeadcount,
+           sum(sub.revenue) AS estimatedGroupRevenue,
+           collect(DISTINCT sub.country)[0..20] AS countries
 - name: SiblingCompanies
-  description: 'Companies under the same ultimate owner as one you already deal with — the accounts you
-    have a
+  description: |
+    Companies under the same owner as one you already deal with.
 
-    relationship with by proxy and are probably not calling. Two recursive walks meeting at the top:
-
-    up from your company to the parent, then back down every other branch.
-
-    '
+    The accounts you have a relationship with by proxy and are probably not calling: two recursive
+    walks meeting at the top, up from your company to its parents (three levels), then back down
+    every other branch (three levels). Subsidiary lists are samples of at most 10 per call, so a
+    large group's siblings are not all listed.
   params:
     ask:
       type: string
       default: Shazam
       description: The name of a company you already deal with.
-  cypher: "MATCH (:DiffbotCompany {name: $ask})-[:RESOLVED_TO]->(d:DiffbotOrganization)\nMATCH (d)-[:PARENT_COMPANY*1..3]->(top:DiffbotOrganization)\n\
-    MATCH (top)<-[:SUBSIDIARY_OF*1..3]-(sibling:DiffbotOrganization)\nWHERE sibling.diffbotId <> d.diffbotId\n\
-    RETURN top.name AS group,\n       sibling.name AS sibling,\n       sibling.country AS country,\n \
-    \      sibling.nbEmployees AS headcount,\n       sibling.industries AS industries\nORDER BY headcount\
-    \ DESC\n"
+  cypher: |
+    MATCH (:DiffbotCompany {name: $ask})-[:RESOLVED_TO]->(d:DiffbotOrganization)
+    MATCH (d)-[:PARENT_COMPANY*1..3]->(top:DiffbotOrganization)
+    MATCH (top)<-[:SUBSIDIARY_OF*1..3]-(sibling:DiffbotOrganization)
+    WHERE sibling.diffbotId <> d.diffbotId
+    RETURN top.name AS group,
+           sibling.name AS sibling,
+           sibling.country AS country,
+           sibling.nbEmployees AS headcount,
+           sibling.industries AS industries
+    ORDER BY headcount DESC
 - name: WhoOwnsThisMarket
-  description: 'Search a market in plain language, then walk every result to its ultimate owner. Diffbot
-    answers
-
+  description: |
+    Search a market in plain language, then walk every result to its ultimate owner. Diffbot answers
     the first half and stops; the ownership column needs traversal, and it is usually the half that
-
     matters — an apparently fragmented sector often has three owners.
-
-    '
   params:
     industry:
       type: string
@@ -125,45 +120,38 @@
     companies:
       type: int
       default: 10
-      description: How many of the matched companies to walk upward. Each one costs its own chain of fetches,
-        so this is the view's spending ceiling.
-  cypher: "MATCH (:DiffbotIndustry {name: $industry})-[:HAS_COMPANY]->(o:DiffbotOrganization)\nWHERE o.country\
-    \ = $country\nWITH o ORDER BY o.importance DESC LIMIT $companies\nOPTIONAL MATCH (o)-[:PARENT_COMPANY*1..3]->(owner:DiffbotOrganization)\n\
-    WITH o, collect(owner)[-1] AS ultimate\nRETURN coalesce(ultimate.name, o.name) AS ultimateOwner,\n\
-    \       coalesce(ultimate.country, o.country) AS ownerCountry,\n       count(o) AS companiesInMarket,\n\
-    \       collect(o.name)[0..6] AS examples,\n       sum(o.nbEmployees) AS estimatedStaff\nORDER BY\
-    \ companiesInMarket DESC\n"
+      description: How many of the matched companies to walk upward. Each one costs its own chain of fetches, so
+        this is the view's spending ceiling.
+  cypher: |
+    MATCH (:DiffbotIndustry {name: $industry})-[:HAS_COMPANY]->(o:DiffbotOrganization)
+    WHERE o.country = $country
+    WITH o ORDER BY o.importance DESC LIMIT $companies
+    OPTIONAL MATCH (o)-[:PARENT_COMPANY*1..3]->(owner:DiffbotOrganization)
+    WITH o, collect(owner)[-1] AS ultimate
+    RETURN coalesce(ultimate.name, o.name) AS ultimateOwner,
+           coalesce(ultimate.country, o.country) AS ownerCountry,
+           count(o) AS companiesInMarket,
+           collect(o.name)[0..6] AS examples,
+           sum(o.nbEmployees) AS estimatedStaff
+    ORDER BY companiesInMarket DESC
 - name: BoardInterlocks
-  description: 'People who sit on the boards of BOTH of two companies.
+  description: |
+    People who sit on the boards of BOTH of two companies.
 
-
-    Only ONE company''s people are fetched; the other is tested against each person''s own employment
-
+    Only ONE company's people are fetched; the other is tested against each person's own employment
     history, which the record already carries. So the intersection is exact on that side rather than
-
     limited to whoever fell inside one page, and it costs one fetch instead of two.
 
-
-    IT MATCHES ON NAME, NOT ON ENTITY ID, and that is deliberate. Diffbot''s ids are not canonical
-
+    IT MATCHES ON NAME, NOT ON ENTITY ID, and that is deliberate. Diffbot's ids are not canonical
     across access paths: an employment reference to Google carries EUFq-3WlpNsq0pvfUYWXOEA while
-
     `enhance(url=google.com)` returns EkUDBjismNf-8fUxNwfOCBw — the same company, two records. An
-
     id-equality test between the two therefore matches nothing and says so silently. A further 12%
-
     of employment references carry no id at all. Names are what references reliably carry.
 
-
     A BOARD SEAT IS NOT ANY TITLE CONTAINING "Director". That substring catches "Director of
-
     Technical Operations" and every other middle manager, so this wants a title containing "Board",
-
     or one ENDING in "Director" (Non-Executive, Lead Independent) while excluding "Managing
-
     Director", which is an executive role almost everywhere.
-
-    '
   params:
     ask:
       type: string
@@ -172,48 +160,54 @@
     otherCompany:
       type: string
       default: Google
-      description: Name matched against each person's employment history. Substring, case-insensitive
-        — 'Google' also catches 'Google DeepMind'.
-  cypher: "MATCH (:DiffbotCompany {name: $ask})-[:RESOLVED_TO]->(a:DiffbotOrganization)\nMATCH (a)-[:EMPLOYS]->(p:DiffbotPerson)\n\
-    WHERE ANY(n IN p.employerNames WHERE toLower(n) CONTAINS toLower($otherCompany))\n  AND ANY(t IN p.titles\
-    \ WHERE\n            t CONTAINS 'Board'\n            OR (t ENDS WITH 'Director' AND NOT t CONTAINS\
-    \ 'Managing'))\nWITH p, [t IN p.titles WHERE\n           t CONTAINS 'Board'\n           OR (t ENDS\
-    \ WITH 'Director' AND NOT t CONTAINS 'Managing')] AS directorships\nRETURN p.name AS person,\n   \
-    \    directorships[0..4] AS directorships,\n       p.employerNames AS everywhereTheySit,\n       p.linkedInUri\
-    \ AS profile\nORDER BY size(p.employerNames) DESC\nLIMIT 50\n"
+      description: Name matched against each person's employment history. Substring, case-insensitive — 'Google'
+        also catches 'Google DeepMind'.
+  cypher: |
+    MATCH (:DiffbotCompany {name: $ask})-[:RESOLVED_TO]->(a:DiffbotOrganization)
+    MATCH (a)-[:EMPLOYS]->(p:DiffbotPerson)
+    WHERE ANY(n IN p.employerNames WHERE toLower(n) CONTAINS toLower($otherCompany))
+      AND ANY(t IN p.titles WHERE
+                t CONTAINS 'Board'
+                OR (t ENDS WITH 'Director' AND NOT t CONTAINS 'Managing'))
+    WITH p, [t IN p.titles WHERE
+               t CONTAINS 'Board'
+               OR (t ENDS WITH 'Director' AND NOT t CONTAINS 'Managing')] AS directorships
+    RETURN p.name AS person,
+           directorships[0..4] AS directorships,
+           p.employerNames AS everywhereTheySit,
+           p.linkedInUri AS profile
+    ORDER BY size(p.employerNames) DESC
+    LIMIT 50
 - name: TalentFlow
-  description: 'Where a company''s leavers actually went.
+  description: |
+    Where a company's leavers actually went.
 
-
-    Diffbot''s past-employment filter also returns people still there under an earlier title — someone
-
+    Diffbot's past-employment filter also returns people still there under an earlier title — someone
     promoted internally holds a non-current role at the same employer — so the honest alumni set is
-
     the past-employee edge MINUS the current-staff edge. That set difference is the whole trick, and
-
     Diffbot cannot express it: it is two queries whose results have to meet somewhere.
-
-    '
   params:
     ask:
       type: string
       default: Diffbot
       description: The company's name.
-  cypher: "MATCH (:DiffbotCompany {name: $ask})-[:RESOLVED_TO]->(o:DiffbotOrganization)\nMATCH (o)-[:FORMERLY_EMPLOYED]->(p:DiffbotPerson)\n\
-    WHERE NOT (o)-[:EMPLOYS]->(p)\n  AND p.currentEmployerId IS NOT NULL\n  AND p.currentEmployerId <>\
-    \ o.diffbotId\nRETURN p.currentEmployerName AS wentTo,\n       count(*) AS people,\n       collect(p.name)[0..5]\
-    \ AS examples\nORDER BY people DESC\n"
+  cypher: |
+    MATCH (:DiffbotCompany {name: $ask})-[:RESOLVED_TO]->(o:DiffbotOrganization)
+    MATCH (o)-[:FORMERLY_EMPLOYED]->(p:DiffbotPerson)
+    WHERE NOT (o)-[:EMPLOYS]->(p)
+      AND p.currentEmployerId IS NOT NULL
+      AND p.currentEmployerId <> o.diffbotId
+    RETURN p.currentEmployerName AS wentTo,
+           count(*) AS people,
+           collect(p.name)[0..5] AS examples
+    ORDER BY people DESC
 - name: CompetitorHiring
-  description: 'What the competitors of a company are staffing up for. A hiring plan is the least guarded
-
+  description: |
+    What the competitors of a company are staffing up for. A hiring plan is the least guarded
     statement of strategy a company makes, and the skills on each posting say more than the titles.
 
-
     Note the direction: COMPETES_WITH is INBOUND — companies that name this one as a competitor,
-
     which is not the same as the ones it names itself.
-
-    '
   params:
     ask:
       type: string
@@ -223,19 +217,24 @@
       type: int
       default: 90
       description: How far back to look.
-  cypher: "MATCH (:DiffbotCompany {name: $ask})-[:RESOLVED_TO]->(d:DiffbotOrganization)\nMATCH (d)-[:COMPETES_WITH]->(rival:DiffbotOrganization)-[:IS_HIRING_FOR]->(j:DiffbotJobPost)\n\
-    WHERE j.dateTimestamp > datetime().epochMillis - ($sinceDays * 86400000)\nRETURN rival.name AS competitor,\n\
-    \       j.title AS role,\n       j.skills AS skills,\n       j.city AS city,\n       j.remote AS arrangement,\n\
-    \       j.date AS posted\nORDER BY j.dateTimestamp DESC\n"
+  cypher: |
+    MATCH (:DiffbotCompany {name: $ask})-[:RESOLVED_TO]->(d:DiffbotOrganization)
+    MATCH (d)-[:COMPETES_WITH]->(rival:DiffbotOrganization)-[:IS_HIRING_FOR]->(j:DiffbotJobPost)
+    WHERE j.dateTimestamp > datetime().epochMillis - ($sinceDays * 86400000)
+    RETURN rival.name AS competitor,
+           j.title AS role,
+           j.skills AS skills,
+           j.city AS city,
+           j.remote AS arrangement,
+           j.date AS posted
+    ORDER BY j.dateTimestamp DESC
 - name: SkillDemand
-  description: 'What capability a whole market is buying, counted across every company''s open roles rather
-    than
+  description: |
+    Skills most often required by open roles across an industry's top companies.
 
-    read one posting at a time. The unit is the skill, not the job title — "staff engineer" means
-
-    nothing across companies, "Rust" means the same thing everywhere.
-
-    '
+    Counted across every company's postings rather than read one at a time: the unit is the skill,
+    not the job title. Bounded by `companies` (by Diffbot importance) and by the recent postings
+    Diffbot returns for them, so it ranks demand; it is not a count of all vacancies.
   params:
     industry:
       type: string
@@ -245,83 +244,94 @@
       type: int
       default: 10
       description: How many matched companies to pull postings for. Each costs a fetch.
-  cypher: "MATCH (:DiffbotIndustry {name: $industry})-[:HAS_COMPANY]->(o:DiffbotOrganization)\nWITH o\
-    \ ORDER BY o.importance DESC LIMIT $companies\nMATCH (o)-[:IS_HIRING_FOR]->(j:DiffbotJobPost)\nUNWIND\
-    \ j.skills AS skill\nRETURN skill,\n       count(DISTINCT j) AS postings,\n       count(DISTINCT o)\
-    \ AS companies,\n       collect(DISTINCT o.name)[0..5] AS hiringFor\nORDER BY postings DESC\nLIMIT\
-    \ 40\n"
+  cypher: |
+    MATCH (:DiffbotIndustry {name: $industry})-[:HAS_COMPANY]->(o:DiffbotOrganization)
+    WITH o ORDER BY o.importance DESC LIMIT $companies
+    MATCH (o)-[:IS_HIRING_FOR]->(j:DiffbotJobPost)
+    UNWIND j.skills AS skill
+    RETURN skill,
+           count(DISTINCT j) AS postings,
+           count(DISTINCT o) AS companies,
+           collect(DISTINCT o.name)[0..5] AS hiringFor
+    ORDER BY postings DESC
+    LIMIT 40
 - name: PeopleSearch
-  description: 'Ask Diffbot for people in plain language — the person equivalent of CompanySearch. Public
+  description: |
+    People currently holding a job title in one city, from Diffbot's public records.
 
-    professional record only, capped at 50.
-
-    '
+    Title and city are sent to Diffbot as structured filters; nothing is generated. Public
+    professional record only, at most 20 people per title: a sample, never a count of everyone with
+    that title.
   outputLabel: DiffbotPerson
   params:
     title:
       type: string
       default: CTO
-      description: The job title, as it appears on a profile.
+      description: The job title exactly as it appears on profiles, e.g. 'CTO'; matched as Diffbot records it.
     city:
       type: string
       default: Melbourne
-      description: City the person is currently in.
-  cypher: 'MATCH (:DiffbotJobTitle {title: $title})-[:HELD_BY]->(p:DiffbotPerson)
-
+      description: City the person is currently in, exactly as Diffbot spells it; matched exactly and sent to Diffbot.
+  cypher: |
+    MATCH (:DiffbotJobTitle {title: $title})-[:HELD_BY]->(p:DiffbotPerson)
     WHERE p.city = $city
-
     RETURN p
-
-    '
 - name: ContactCompanyProfiles
-  description: 'Every company the user''s correspondents work for, enriched. The anchor is the inbox,
-    so the
-
-    fan-out is bounded by who has actually emailed rather than by Diffbot''s index.
-
-    '
-  cypher: "MATCH (me:AssistantUser)-[:EMAILED]->(p:Person)-[:WORKS_FOR]->(o:Organization)\nMATCH (o)-[:HAS_DIFFBOT_ORG]->(d:DiffbotOrganization)\n\
-    RETURN DISTINCT o.name AS organization,\n       d.nbEmployees AS headcount,\n       d.revenue AS revenue,\n\
-    \       d.industries AS industries,\n       d.country AS country,\n       d.ultimateParentName AS\
-    \ ultimateOwner,\n       d.isAcquired AS acquired,\n       d.nbOrigins AS sourceCount\nORDER BY headcount\
-    \ DESC\n"
+  description: |
+    Every company the user's correspondents work for, enriched. The anchor is the inbox, so the
+    fan-out is bounded by who has actually emailed rather than by Diffbot's index.
+  cypher: |
+    MATCH (me:AssistantUser)-[:EMAILED]->(p:Person)-[:WORKS_FOR]->(o:Organization)
+    MATCH (o)-[:HAS_DIFFBOT_ORG]->(d:DiffbotOrganization)
+    RETURN DISTINCT o.name AS organization,
+           d.nbEmployees AS headcount,
+           d.revenue AS revenue,
+           d.industries AS industries,
+           d.country AS country,
+           d.ultimateParentName AS ultimateOwner,
+           d.isAcquired AS acquired,
+           d.nbOrigins AS sourceCount
+    ORDER BY headcount DESC
 - name: HiddenCommonOwner
-  description: 'Two companies in YOUR world that quietly share an ultimate owner. The kind of thing that
-    changes
+  description: |
+    Pairs of companies you deal with that share an owner up to three levels up.
 
-    a negotiating position, and that nothing in your own graph records — the link lives in a
-
-    corporate registry neither company puts in its email signature.
-
-    '
-  cypher: "MATCH (me:AssistantUser)-[:EMAILED]->(:Person)-[:WORKS_FOR]->(oa:Organization)\nMATCH (me)-[:EMAILED]->(:Person)-[:WORKS_FOR]->(ob:Organization)\n\
-    WHERE oa.name < ob.name\nMATCH (oa)-[:HAS_DIFFBOT_ORG]->(da:DiffbotOrganization)-[:PARENT_COMPANY*1..3]->(top:DiffbotOrganization)\n\
-    MATCH (ob)-[:HAS_DIFFBOT_ORG]->(db:DiffbotOrganization)-[:PARENT_COMPANY*1..3]->(top)\nRETURN top.name\
-    \ AS commonOwner,\n       top.country AS ownerCountry,\n       oa.name AS companyA,\n       ob.name\
-    \ AS companyB\n"
+    The kind of thing that changes a negotiating position, and that nothing in your own graph
+    records. Only companies your correspondents work for and that resolve to Diffbot by domain; an
+    owner more than three levels up, or one Diffbot does not record, is missed, so no row does not
+    prove independence.
+  cypher: |
+    MATCH (me:AssistantUser)-[:EMAILED]->(:Person)-[:WORKS_FOR]->(oa:Organization)
+    MATCH (me)-[:EMAILED]->(:Person)-[:WORKS_FOR]->(ob:Organization)
+    WHERE oa.name < ob.name
+    MATCH (oa)-[:HAS_DIFFBOT_ORG]->(da:DiffbotOrganization)-[:PARENT_COMPANY*1..3]->(top:DiffbotOrganization)
+    MATCH (ob)-[:HAS_DIFFBOT_ORG]->(db:DiffbotOrganization)-[:PARENT_COMPANY*1..3]->(top)
+    RETURN top.name AS commonOwner,
+           top.country AS ownerCountry,
+           oa.name AS companyA,
+           ob.name AS companyB
 - name: QuietlyAbsorbed
-  description: 'Companies in your world that have been acquired or dissolved without your graph knowing.
+  description: |
+    Companies you deal with that Diffbot says were acquired or have dissolved.
 
-
-    An empty answer is the reassuring one here, which makes it the dangerous direction: a FAILED
-
-    fetch also returns no rows. Read `warnings` before reporting nothing.
-
-    '
-  cypher: "MATCH (me:AssistantUser)-[:EMAILED]->(:Person)-[:WORKS_FOR]->(o:Organization)\nMATCH (o)-[:HAS_DIFFBOT_ORG]->(d:DiffbotOrganization)\n\
-    WHERE d.isAcquired = true OR d.isDissolved = true\nOPTIONAL MATCH (d)-[:ACQUIRED_BY]->(buyer:DiffbotOrganization)\n\
-    RETURN o.name AS organization,\n       d.isAcquired AS acquired,\n       d.isDissolved AS dissolved,\n\
-    \       coalesce(buyer.name, d.acquiredByName, d.ultimateParentName) AS nowOwnedBy,\n       d.nbOrigins\
-    \ AS sourceCount\n"
+    Only companies your correspondents work for, and only where Diffbot holds the flag. An empty
+    answer is the reassuring one here, which makes it the dangerous direction: a FAILED fetch also
+    returns no rows. Read `warnings` before reporting nothing.
+  cypher: |
+    MATCH (me:AssistantUser)-[:EMAILED]->(:Person)-[:WORKS_FOR]->(o:Organization)
+    MATCH (o)-[:HAS_DIFFBOT_ORG]->(d:DiffbotOrganization)
+    WHERE d.isAcquired = true OR d.isDissolved = true
+    OPTIONAL MATCH (d)-[:ACQUIRED_BY]->(buyer:DiffbotOrganization)
+    RETURN o.name AS organization,
+           d.isAcquired AS acquired,
+           d.isDissolved AS dissolved,
+           coalesce(buyer.name, d.acquiredByName, d.ultimateParentName) AS nowOwnedBy,
+           d.nbOrigins AS sourceCount
 - name: ContactCompanyNews
-  description: 'Recent negative-toned coverage of companies you are in contact with. Date and sentiment
-    push down
-
+  description: |
+    Recent negative-toned coverage of companies you are in contact with. Date and sentiment push down
     into DQL, so this fetches the slice rather than fetching everything and discarding most of it.
-
     Sentiment is tone, not wrongdoing — read the articles.
-
-    '
   params:
     sinceDays:
       type: int
@@ -331,18 +341,25 @@
       type: float
       default: -0.3
       description: Only articles at or below this tone score.
-  cypher: "MATCH (me:AssistantUser)-[:EMAILED]->(:Person)-[:WORKS_FOR]->(o:Organization)\nMATCH (o)-[:HAS_DIFFBOT_ORG]->(d:DiffbotOrganization)-[:MENTIONED_IN]->(a:DiffbotArticle)\n\
-    WHERE a.dateTimestamp > datetime().epochMillis - ($sinceDays * 86400000)\n  AND a.sentiment < $maxSentiment\n\
-    RETURN o.name AS organization,\n       a.title AS headline,\n       a.siteName AS publication,\n \
-    \      a.date AS published,\n       a.sentiment AS tone,\n       a.pageUrl AS url\nORDER BY a.sentiment\
-    \ ASC\n"
+  cypher: |
+    MATCH (me:AssistantUser)-[:EMAILED]->(:Person)-[:WORKS_FOR]->(o:Organization)
+    MATCH (o)-[:HAS_DIFFBOT_ORG]->(d:DiffbotOrganization)-[:MENTIONED_IN]->(a:DiffbotArticle)
+    WHERE a.dateTimestamp > datetime().epochMillis - ($sinceDays * 86400000)
+      AND a.sentiment < $maxSentiment
+    RETURN o.name AS organization,
+           a.title AS headline,
+           a.siteName AS publication,
+           a.date AS published,
+           a.sentiment AS tone,
+           a.pageUrl AS url
+    ORDER BY a.sentiment ASC
 - name: ExecutiveExposure
-  description: 'The people leading companies you deal with, and the press about them personally — the
-    reputational
+  description: |
+    Negative press about the CEOs of companies you correspond with.
 
-    surface a company carries through its executives rather than through its own name.
-
-    '
+    The reputational surface a company carries through its leader rather than its own name. Only the
+    CEO (LED_BY), only companies your correspondents work for, and at most 10 articles per executive,
+    newest first, within the window.
   params:
     sinceDays:
       type: int
@@ -352,81 +369,79 @@
       type: float
       default: -0.2
       description: Only coverage at or below this tone.
-  cypher: "MATCH (me:AssistantUser)-[:EMAILED]->(:Person)-[:WORKS_FOR]->(o:Organization)\nMATCH (o)-[:HAS_DIFFBOT_ORG]->(d:DiffbotOrganization)-[:LED_BY]->(exec:DiffbotPerson)\n\
-    MATCH (exec)-[:MENTIONED_IN]->(a:DiffbotArticle)\nWHERE a.dateTimestamp > datetime().epochMillis -\
-    \ ($sinceDays * 86400000)\n  AND a.sentiment < $maxSentiment\nRETURN o.name AS organization,\n   \
-    \    exec.name AS executive,\n       a.title AS headline,\n       a.siteName AS publication,\n   \
-    \    a.sentiment AS tone,\n       a.pageUrl AS url\nORDER BY a.sentiment ASC\n"
+  cypher: |
+    MATCH (me:AssistantUser)-[:EMAILED]->(:Person)-[:WORKS_FOR]->(o:Organization)
+    MATCH (o)-[:HAS_DIFFBOT_ORG]->(d:DiffbotOrganization)-[:LED_BY]->(exec:DiffbotPerson)
+    MATCH (exec)-[:MENTIONED_IN]->(a:DiffbotArticle)
+    WHERE a.dateTimestamp > datetime().epochMillis - ($sinceDays * 86400000)
+      AND a.sentiment < $maxSentiment
+    RETURN o.name AS organization,
+           exec.name AS executive,
+           a.title AS headline,
+           a.siteName AS publication,
+           a.sentiment AS tone,
+           a.pageUrl AS url
+    ORDER BY a.sentiment ASC
 - name: HiringSignals
-  description: 'What the companies in your world are advertising for. Visible intent with a lag — a posting
-
+  description: |
+    What the companies in your world are advertising for. Visible intent with a lag — a posting
     outlives the vacancy — so read it as direction, not as headcount change.
-
-    '
   params:
     sinceDays:
       type: int
       default: 60
       description: How far back to look.
-  cypher: "MATCH (me:AssistantUser)-[:EMAILED]->(:Person)-[:WORKS_FOR]->(o:Organization)\nMATCH (o)-[:HAS_DIFFBOT_ORG]->(d:DiffbotOrganization)-[:IS_HIRING_FOR]->(j:DiffbotJobPost)\n\
-    WHERE j.dateTimestamp > datetime().epochMillis - ($sinceDays * 86400000)\nRETURN o.name AS organization,\n\
-    \       j.title AS role,\n       j.skills AS skills,\n       j.city AS city,\n       j.remote AS arrangement,\n\
-    \       j.date AS posted\nORDER BY j.dateTimestamp DESC\n"
+  cypher: |
+    MATCH (me:AssistantUser)-[:EMAILED]->(:Person)-[:WORKS_FOR]->(o:Organization)
+    MATCH (o)-[:HAS_DIFFBOT_ORG]->(d:DiffbotOrganization)-[:IS_HIRING_FOR]->(j:DiffbotJobPost)
+    WHERE j.dateTimestamp > datetime().epochMillis - ($sinceDays * 86400000)
+    RETURN o.name AS organization,
+           j.title AS role,
+           j.skills AS skills,
+           j.city AS city,
+           j.remote AS arrangement,
+           j.date AS posted
+    ORDER BY j.dateTimestamp DESC
 - name: MovieSearch
-  description: 'Ask Diffbot for films in plain language. Rewritten into DQL at the source; capped at 50.
+  description: |
+    Films in a Diffbot genre released after a given date.
 
-    '
+    Structured, not plain language: the genre is the source key and the date bound is sent to
+    Diffbot. At most 20 films per genre, a sample, not the catalogue.
   outputLabel: DiffbotMovie
   params:
     genre:
       type: string
       default: cyberpunk
-      description: A Diffbot genre label.
+      description: A Diffbot genre label, exactly as Diffbot spells it, e.g. 'cyberpunk'.
     after:
       type: string
       default: '1990-01-01'
-      description: Only films released after this ISO date. Pushed to the source.
-  cypher: 'MATCH (:DiffbotGenre {name: $genre})-[:HAS_FILM]->(f:DiffbotMovie)
-
+      description: Only films released after this date, ISO yyyy-MM-dd. Sent to Diffbot as a release-date bound.
+  cypher: |
+    MATCH (:DiffbotGenre {name: $genre})-[:HAS_FILM]->(f:DiffbotMovie)
     WHERE f.releaseDate > $after
-
     RETURN f
-
-    '
 - name: RepeatCollaborators
-  description: 'Actors who keep turning up in one director''s films — the ensemble a director actually
-    works with,
+  description: |
+    Actors who appear in at least minFilms of one director's distinct films.
 
-    rather than the one a press profile claims.
-
+    The ensemble a director actually works with, rather than the one a press profile claims. Bounded
+    by the 20 film records one director search returns, and only credits with a recorded character.
 
     COUNT DISTINCT TITLES, NOT RECORDS. Diffbot holds roughly two records for most films: a search
-
-    for Christopher Nolan''s work returns 32 records for 18 distinct titles, with Interstellar,
-
+    for Christopher Nolan's work returns 32 records for 18 distinct titles, with Interstellar,
     Inception, Memento, Tenet and nine others each appearing twice. Counting rows therefore
+    overstates every collaboration (Michael Caine reads as 15 Nolan films instead of 8).
 
-    overstates every collaboration — Michael Caine reads as 15 Nolan films instead of 8.
-
-
-    Diffbot''s own aggregation answers this shape in a single call
-
+    Diffbot's own aggregation answers this shape in a single call
     (`facet:castmembers.castmember.name`) and returns exactly those inflated numbers, because a
-
     facet counts records and offers no way to dedupe. It also returns only a value and a count: no
-
     titles, so nothing in the answer reveals that anything is wrong. Returning `films` alongside the
-
     count is what makes the duplication visible, and DISTINCT is what makes the number right.
 
-
     Under-reports in the other direction: HAS_CAST is keyed on the character name, so a credit with
-
-    no recorded character is absent. Read this as "at least this many", and check the echoed DQL is a
-
-    director match rather than a title match.
-
-    '
+    no recorded character is absent. Read this as "at least this many".
   params:
     director:
       type: string
@@ -436,22 +451,25 @@
       type: int
       default: 3
       description: Only actors appearing in at least this many DISTINCT films.
-  cypher: "MATCH (:DiffbotDirector {name: $director})-[:DIRECTED]->(m:DiffbotMovie)\nMATCH (m)-[:HAS_CAST]->(c:DiffbotCastMember)\n\
-    WITH c.actorName AS actor,\n     collect(DISTINCT m.name) AS films,\n     count(DISTINCT m.name) AS\
-    \ filmCount\nWHERE filmCount >= $minFilms\nRETURN actor,\n       filmCount,\n       films\nORDER BY\
-    \ filmCount DESC, actor\nLIMIT 200\n"
+  cypher: |
+    MATCH (:DiffbotDirector {name: $director})-[:DIRECTED]->(m:DiffbotMovie)
+    MATCH (m)-[:HAS_CAST]->(c:DiffbotCastMember)
+    WITH c.actorName AS actor,
+         collect(DISTINCT m.name) AS films,
+         count(DISTINCT m.name) AS filmCount
+    WHERE filmCount >= $minFilms
+    RETURN actor,
+           filmCount,
+           films
+    ORDER BY filmCount DESC, actor
+    LIMIT 200
 - name: FilmOwnership
-  description: 'Who actually owns the studios behind a set of films. Three questions stacked: a film search,
-    a
-
+  description: |
+    Who actually owns the studios behind a set of films. Three questions stacked: a film search, a
     scored name match onto each production company, then the recursive ownership walk. Diffbot holds
-
     every part and can traverse none of it.
 
-
     A studio resolved by name is a good guess, not a fact — check `sourceCount` before repeating it.
-
-    '
   params:
     genre:
       type: string
@@ -461,55 +479,56 @@
       type: int
       default: 8
       description: How many films to resolve studios for. Each studio name costs its own scored lookup.
-  cypher: "MATCH (:DiffbotGenre {name: $genre})-[:HAS_FILM]->(f:DiffbotMovie)\nWITH f ORDER BY f.wikipediaPageviews\
-    \ DESC LIMIT $films\nMATCH (f)-[:PRODUCED_BY]->(studio:DiffbotOrganization)\nOPTIONAL MATCH (studio)-[:PARENT_COMPANY*1..4]->(owner:DiffbotOrganization)\n\
-    WITH f, studio, collect(owner)[-1] AS ultimate\nRETURN coalesce(ultimate.name, studio.name) AS ultimateOwner,\n\
-    \       coalesce(ultimate.country, studio.country) AS ownerCountry,\n       count(DISTINCT f) AS films,\n\
-    \       collect(DISTINCT studio.name)[0..6] AS studios,\n       collect(DISTINCT f.name)[0..6] AS\
-    \ examples,\n       min(studio.nbOrigins) AS sourceCount\nORDER BY films DESC\n"
+  cypher: |
+    MATCH (:DiffbotGenre {name: $genre})-[:HAS_FILM]->(f:DiffbotMovie)
+    WITH f ORDER BY f.wikipediaPageviews DESC LIMIT $films
+    MATCH (f)-[:PRODUCED_BY]->(studio:DiffbotOrganization)
+    OPTIONAL MATCH (studio)-[:PARENT_COMPANY*1..4]->(owner:DiffbotOrganization)
+    WITH f, studio, collect(owner)[-1] AS ultimate
+    RETURN coalesce(ultimate.name, studio.name) AS ultimateOwner,
+           coalesce(ultimate.country, studio.country) AS ownerCountry,
+           count(DISTINCT f) AS films,
+           collect(DISTINCT studio.name)[0..6] AS studios,
+           collect(DISTINCT f.name)[0..6] AS examples,
+           min(studio.nbOrigins) AS sourceCount
+    ORDER BY films DESC
 - name: DirectorFilmography
-  description: 'A director''s films with their cultural footprint. `wikipediaPageviews` against
+  description: |
+    A director's films with release date, studios and Wikipedia pageviews.
 
-    `wikipediaPageviewsLastYear` separates an enduring film from a currently-talked-about one.
-
-    '
-  cypher: "MATCH (:DiffbotDirector {name: $director})-[:DIRECTED]->(f:DiffbotMovie)\nRETURN f.name AS\
-    \ film,\n       f.releaseDate AS released,\n       f.genres AS genres,\n       f.productionCompanyNames\
-    \ AS studios,\n       f.wikipediaPageviews AS pageviewsAllTime,\n       f.wikipediaPageviewsLastYear\
-    \ AS pageviewsLastYear,\n       f.imdbUri AS imdb\nORDER BY f.releaseDateTimestamp DESC\n"
+    `wikipediaPageviews` against `wikipediaPageviewsLastYear` separates an enduring film from a
+    currently-talked-about one. At most 20 film records per director, and Diffbot often holds two
+    records of one film, so the list can show duplicates; credits under a variant spelling of the
+    name are missed.
+  cypher: |
+    MATCH (:DiffbotDirector {name: $director})-[:DIRECTED]->(f:DiffbotMovie)
+    RETURN f.name AS film,
+           f.releaseDate AS released,
+           f.genres AS genres,
+           f.productionCompanyNames AS studios,
+           f.wikipediaPageviews AS pageviewsAllTime,
+           f.wikipediaPageviewsLastYear AS pageviewsLastYear,
+           f.imdbUri AS imdb
+    ORDER BY f.releaseDateTimestamp DESC
   params:
     director:
       type: string
       default: Lana Wachowski
       description: The director's name as film credits spell it.
 - name: FilmCast
-  description: 'A film''s cast as actor/character rows, from the HAS_CAST sub-graph brought with the film
-    in the
+  description: |
+    A film's cast as actor/character rows, for one film by one director.
 
-    same fetch — no extra calls.
-
+    From the HAS_CAST sub-graph brought with the film in the same fetch, so no extra calls.
 
     Do NOT build this by zipping `castNames` against `characterNames`. A `[*]` projection drops
-
     elements whose field is absent, so the two lists have different lengths whenever a role is
-
-    unrecorded — 31 against 20 on "The Odyssey" (2026), 4 against 0 on "Ultraman Tiga". Every pairing
-
+    unrecorded: 31 against 20 on "The Odyssey" (2026), 4 against 0 on "Ultraman Tiga". Every pairing
     after the first gap is wrong, and an index past the shorter list fails the query outright.
 
-
-    Only credits with a RECORDED CHARACTER appear — the brought child is keyed on the character,
-
-    because the host reads a brought id off the raw record before projection and the raw entry has no
-
-    top-level actor field. About a third of credits on a well-covered film have no character and are
-
-    therefore absent here; `f.castNames` still holds the complete list.
-
-
-    Scoped to ONE film, so two roles sharing a character name cannot merge.
-
-    '
+    Only credits with a RECORDED CHARACTER appear, because each row is keyed on the character. About
+    a third of credits on a well-covered film have none and are absent here; `totalCreditsOnFilm`
+    counts the complete list. Scoped to ONE film, so two roles sharing a character name cannot merge.
   params:
     director:
       type: string
@@ -519,28 +538,14 @@
       type: string
       default: The Odyssey
       description: The film title, within that director's work.
-  cypher: "MATCH (:DiffbotDirector {name: $director})-[:DIRECTED]->(f:DiffbotMovie)\nWHERE f.name = $film\n\
-    WITH f ORDER BY f.wikipediaPageviews DESC LIMIT 1\nMATCH (f)-[:HAS_CAST]->(c:DiffbotCastMember)\n\
-    RETURN f.name AS film,\n       f.releaseDate AS released,\n       c.actorName AS actor,\n       c.characterName\
-    \ AS character,\n       size(f.castNames) AS totalCreditsOnFilm\nORDER BY actor\n"
-- name: MyFilmsByOwner
-  description: 'The films YOU have rated, grouped by who ultimately owns the studio that made them. The
-    one
-
-    query in this realm that needs three separate worlds to agree: your own ratings, Diffbot''s film
-
-    catalogue, and its corporate ownership graph — joined on an IMDb id and a company name.
-
-
-    REQUIRES realm-movie. Without it there are no rated films to anchor on and this returns nothing.
-
-    '
-  params:
-    minRating:
-      type: int
-      default: 4
-      description: Only films you rated at least this highly.
-  cypher: "MATCH (r:MovieRating)-[:OF_MOVIE]->(m:Movie)\nWHERE r.rating >= $minRating\nMATCH (m)-[:HAS_DIFFBOT_MOVIE]->(f:DiffbotMovie)-[:PRODUCED_BY]->(studio:DiffbotOrganization)\n\
-    OPTIONAL MATCH (studio)-[:PARENT_COMPANY*1..4]->(owner:DiffbotOrganization)\nWITH m, studio, collect(owner)[-1]\
-    \ AS ultimate\nRETURN coalesce(ultimate.name, studio.name) AS ultimateOwner,\n       count(DISTINCT\
-    \ m) AS filmsYouRated,\n       collect(DISTINCT m.title)[0..8] AS films\nORDER BY filmsYouRated DESC\n"
+  cypher: |
+    MATCH (:DiffbotDirector {name: $director})-[:DIRECTED]->(f:DiffbotMovie)
+    WHERE f.name = $film
+    WITH f ORDER BY f.wikipediaPageviews DESC LIMIT 1
+    MATCH (f)-[:HAS_CAST]->(c:DiffbotCastMember)
+    RETURN f.name AS film,
+           f.releaseDate AS released,
+           c.actorName AS actor,
+           c.characterName AS character,
+           size(f.castNames) AS totalCreditsOnFilm
+    ORDER BY actor

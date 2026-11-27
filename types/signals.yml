@@ -7,15 +7,15 @@
 - name: DiffbotArticle
   userAnchor: false
   description: |
-    A news article, blog post or other article Diffbot has extracted, reached because it MENTIONS a
-    specific entity — not because it matched a keyword.
+    One news article, blog post or other page Diffbot extracted, identified by diffbotId (cite pageUrl).
+    Reached because Diffbot tagged it as MENTIONING a specific entity, not because it matched a keyword.
+    Read live, kept an hour. `sentiment` is document tone from -1 to 1, not a finding.
 
-    `sentiment` is Diffbot's document-level score from -1 to 1. It is a tone signal, not a judgment:
-    a factual piece about a downturn scores negative without alleging anything, and a hostile piece
+    A factual piece about a downturn scores negative without alleging anything, and a hostile piece
     can score neutral. Never restate a sentiment score as a finding about the company.
   properties:
     diffbotId: { identity: true, description: "Stable Diffbot entity id for the article." }
-    title: "Headline."
+    title: "The headline as the publisher wrote it, unedited; may be in the source language."
     siteName: "Publication name."
     author: "Byline, when extracted."
     date: "Publication date in Diffbot's own textual form, carrying a leading `d` (e.g. `d2025-07-31T00:00`). DISPLAY ONLY — see dateTimestamp for filtering."
@@ -34,6 +34,10 @@
     # the fetch at Diffbot instead of pulling fifty articles to keep three.
     - anchorLabel: DiffbotOrganization
       relationship: MENTIONED_IN
+      description: >-
+        From a company to articles Diffbot has tagged as mentioning THAT entity (not a keyword
+        match), newest first: at most 10 per company, one call per company, kept an hour. Filters on
+        date (an ISO yyyy-MM-dd bound), sentiment and language are sent to Diffbot.
       keyField: diffbotId
       recordKeyField: matchedFor
       producer: articlesByEntity
@@ -44,6 +48,10 @@
     # anchor carries, and Diffbot tags people exactly as it tags companies.
     - anchorLabel: DiffbotPerson
       relationship: MENTIONED_IN
+      description: >-
+        From a person to articles Diffbot has tagged as mentioning THAT person, newest first: at
+        most 10 per person, one call per person, kept an hour. Filters on date (an ISO yyyy-MM-dd
+        bound), sentiment and language are sent to Diffbot.
       keyField: diffbotId
       recordKeyField: matchedFor
       producer: articlesByEntity
@@ -53,15 +61,14 @@
 - name: DiffbotJobPost
   userAnchor: false
   description: |
-    An open role Diffbot has extracted, linked to the employing organization by entity reference.
-
-    A hiring signal with a lag: postings persist after being filled and disappear without being
-    filled, so treat a count as evidence of visible intent, not of headcount change.
+    One job posting Diffbot extracted, identified by diffbotId and linked to its employer by
+    employerId. Read live, kept six hours. A hiring signal with a lag: postings persist after being
+    filled and vanish without being filled, so a count is visible intent, not headcount change.
   properties:
     diffbotId: { identity: true, description: "Stable Diffbot entity id for the job post." }
-    title: "Job title."
+    title: "The job title as the posting advertises it, unnormalized."
     employerId: "Diffbot id of the employing organization."
-    employerName: "Employer name."
+    employerName: "The employing organization's name as the posting gives it, present without following IS_HIRING_FOR."
     date: "Posting date in Diffbot's own textual form, carrying a leading `d`. DISPLAY ONLY — see dateTimestamp."
     dateTimestamp: { type: int, description: "Posting date as epoch milliseconds. Filter on this graph-side." }
     remote: "Work arrangement as Diffbot's normalized token — `REMOTE`, `NOT_REMOTE`, `HYBRID`, `UNDEFINED`. Diffbot returns this as an object; the token is lifted from its normalizedValue — verified live 2026-08-14."
@@ -74,6 +81,10 @@
   virtualJoins:
     - anchorLabel: DiffbotOrganization
       relationship: IS_HIRING_FOR
+      description: >-
+        From a company to its job posts, newest first, by the post's employer id. Batched up to 25
+        companies per call with at most 10 posts per call across the batch, so it is a sample of
+        recent postings, not a vacancy count. Filters on date and remote are sent to Diffbot.
       keyField: diffbotId
       recordKeyField: employerId
       producer: jobsByEmployer
